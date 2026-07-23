@@ -1,7 +1,7 @@
 from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QLabel, QScrollArea
 
-from .image_io import load_pixmap
 from .utils import first_image_path
 
 
@@ -37,10 +37,24 @@ class ImageView(QScrollArea):
         self._original_pixmap = None
         self._zoom = None  # None means "fit to window"
 
-    def set_image(self, path):
-        self._original_pixmap = load_pixmap(path)
+    def set_pixmap(self, pixmap):
+        """Display an already-decoded pixmap.
+
+        Decoding happens off the GUI thread (see EditorPage); this just
+        hands the finished result to the canvas.
+        """
+        self._original_pixmap = pixmap
         self._zoom = None
         self._render()
+
+    def clear(self, message=""):
+        """Blank the canvas, e.g. while a new image is decoding."""
+        self._original_pixmap = None
+        self._zoom = None
+        self._canvas.setPixmap(QPixmap())
+        self._canvas.setText(message)
+        self._canvas.setStyleSheet("background-color: #1e1e1e; color: #888888;")
+        self._canvas.resize(self.viewport().size())
 
     def zoom_in(self):
         self._zoom_at(self._effective_zoom() * self.ZOOM_STEP)
@@ -66,7 +80,8 @@ class ImageView(QScrollArea):
         else:
             frac_x = frac_y = 0.5
 
-        self._zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, new_zoom))
+        min_zoom = min(self.MIN_ZOOM, self._fit_zoom())
+        self._zoom = max(min_zoom, min(self.MAX_ZOOM, new_zoom))
         self._render()
 
         new_w = self._canvas.width()
@@ -89,6 +104,7 @@ class ImageView(QScrollArea):
     def _render(self):
         if not self._original_pixmap or self._original_pixmap.isNull():
             return
+        self._canvas.setStyleSheet("background-color: #1e1e1e;")
         zoom = self._effective_zoom()
         size = self._original_pixmap.size()
         target_w = max(1, round(size.width() * zoom))

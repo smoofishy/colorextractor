@@ -2,11 +2,11 @@ from PIL import Image as PILImage
 from PIL import ImageOps
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPen, QPixmap
 
 
 def load_pixmap(path) -> QPixmap:
-    """Load an image file into a QPixmap via Pillow.
+    """Load an image file into a QPixmap via Pillow, at full resolution.
 
     Qt's own image plugins don't cover every format Pillow can read, so
     routing display through Pillow keeps the canvas in sync with what the
@@ -20,21 +20,22 @@ def load_pixmap(path) -> QPixmap:
         return QPixmap.fromImage(qimage.copy())
 
 
-def _cover_crop(pixmap: QPixmap, size: int) -> QPixmap:
-    """Scale to fill a size x size square, then center-crop the overflow."""
-    scaled = pixmap.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-    x = max(0, (scaled.width() - size) // 2)
-    y = max(0, (scaled.height() - size) // 2)
-    return scaled.copy(x, y, size, size)
+def load_thumbnail_qimage(path, size: int) -> QImage:
+    """A square, cover-cropped thumbnail, decoded at reduced resolution.
 
-
-def make_tile_icon(path, size: int) -> QIcon:
-    """A square, cover-cropped thumbnail for a project-grid tile."""
-    try:
-        pixmap = load_pixmap(path)
-    except OSError:
-        return _broken_tile_icon(size)
-    return QIcon(_cover_crop(pixmap, size))
+    Returns a QImage rather than a QPixmap so this can safely run on a
+    background thread (QPixmap is GUI-thread-only; QImage isn't). Uses
+    Pillow's JPEG "draft" mode, which has the decoder itself scale down
+    while decoding instead of decoding at full resolution and scaling
+    afterwards - the difference that keeps large photos from stalling the
+    welcome screen.
+    """
+    with PILImage.open(path) as im:
+        im.draft("RGB", (size, size))
+        im = ImageOps.exif_transpose(im)
+        im = im.convert("RGB")
+        im = ImageOps.fit(im, (size, size), PILImage.LANCZOS)
+        return ImageQt(im).copy()
 
 
 def plus_tile_icon(size: int) -> QIcon:
@@ -60,7 +61,14 @@ def plus_tile_icon(size: int) -> QIcon:
     return QIcon(pixmap)
 
 
-def _broken_tile_icon(size: int) -> QIcon:
+def placeholder_tile_icon(size: int) -> QIcon:
+    """Neutral filler shown for a tile while its thumbnail loads in the background."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(QColor("#2b2b2b"))
+    return QIcon(pixmap)
+
+
+def broken_tile_icon(size: int) -> QIcon:
     pixmap = QPixmap(size, size)
     pixmap.fill(QColor("#2b2b2b"))
     painter = QPainter(pixmap)

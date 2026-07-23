@@ -13,10 +13,6 @@ else
     PYINSTALLER=./venv/bin/pyinstaller
 fi
 
-"$PYINSTALLER" \
-    --windowed \
-    --name "Color Extractor" \
-    --noconfirm \
-    run_gui.py
+"$PYINSTALLER" --noconfirm "Color Extractor.spec"
 
 echo "Built: dist/Color Extractor.app"

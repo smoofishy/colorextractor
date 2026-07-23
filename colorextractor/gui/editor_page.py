@@ -1,11 +1,13 @@
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QThreadPool, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QSplitter, QVBoxLayout, QWidget
 
 from ..extractor import extract_colors
 from .color_panel import ColorPanel
+from .image_io import load_pixmap
 from .image_view import ImageView
 from .project import Project
 from .system import reveal_in_file_manager
+from .workers import CallableThread
 
 
 class EditorPage(QWidget):
@@ -20,6 +22,11 @@ class EditorPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._image_path = None
+        self._thread_pool = QThreadPool.globalInstance()
+        self._image_request_id = 0
+        self._color_request_id = 0
+        self._image_worker = None
+        self._color_worker = None
 
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
@@ -103,14 +110,13 @@ class EditorPage(QWidget):
         self.zoom_label.setText(f"{zoom * 100:.0f}%")
 
     def load_image(self, project: Project):
-        try:
-            self.image_view.set_image(project.path)
-        except OSError as exc:
-            self.statusMessage.emit(f"Could not open image: {exc}", 4000)
-            return False
-
+        """Switch to this image immediately - the (possibly slow) decode
+        and color analysis both run in the background so the editor is
+        never blank-screened waiting on a big photo."""
         self._image_path = project.path
         self.title_edit.setText(project.title)
+        self.image_view.clear("Loading image…")
+        self._start_image_load(project.path)
         self._recompute()
         return True
 
@@ -129,18 +135,55 @@ class EditorPage(QWidget):
             self.title_edit.setText(new_title)
         self.titleChanged.emit(self._image_path, new_title)
 
+    def _start_image_load(self, path):
+        self._image_request_id += 1
+        request_id = self._image_request_id
+        worker = CallableThread(lambda: load_pixmap(path))
+        worker.succeeded.connect(lambda pixmap: self._on_image_loaded(request_id, pixmap))
+        worker.failed.connect(lambda message: self._on_image_load_failed(request_id, message))
+        self._image_worker = worker
+        self._thread_pool.start(worker)
+
+    def _on_image_loaded(self, request_id, pixmap):
+        if request_id != self._image_request_id:
+            return  # a newer image was opened before this one finished decoding
+        self.image_view.set_pixmap(pixmap)
+
+    def _on_image_load_failed(self, request_id, message):
+        if request_id != self._image_request_id:
+            return
+        self.image_view.clear("Could not load image")
+        self.statusMessage.emit(f"Could not open image: {message}", 4000)
+
     def _recompute(self):
         if not self._image_path:
             return
+        path = self._image_path
         settings = self.color_panel.get_settings()
-        try:
-            results = extract_colors(
-                self._image_path,
+        self.color_panel.set_loading()
+
+        self._color_request_id += 1
+        request_id = self._color_request_id
+        worker = CallableThread(
+            lambda: extract_colors(
+                path,
                 num_colors=settings["num_colors"],
                 top_n=settings["top_n"],
                 group_similar=settings["group_similar"],
             )
-        except (FileNotFoundError, ValueError) as exc:
-            self.statusMessage.emit(str(exc), 4000)
-            return
+        )
+        worker.succeeded.connect(lambda results: self._on_colors_ready(request_id, results))
+        worker.failed.connect(lambda message: self._on_colors_failed(request_id, message))
+        self._color_worker = worker
+        self._thread_pool.start(worker)
+
+    def _on_colors_ready(self, request_id, results):
+        if request_id != self._color_request_id:
+            return  # settings changed again (or a new image loaded) before this finished
         self.color_panel.set_colors(results)
+
+    def _on_colors_failed(self, request_id, message):
+        if request_id != self._color_request_id:
+            return
+        self.color_panel.set_colors([])
+        self.statusMessage.emit(message, 4000)

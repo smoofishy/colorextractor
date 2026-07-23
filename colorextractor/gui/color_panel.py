@@ -122,6 +122,10 @@ class ColorPanel(QWidget):
             "group_similar": self.group_checkbox.isChecked(),
         }
 
+    def set_loading(self):
+        self.list_widget.clear()
+        self.hint_label.setText("Calculating colors…")
+
     def set_colors(self, results):
         self.list_widget.clear()
         for color_info in results:
@@ -131,6 +135,7 @@ class ColorPanel(QWidget):
             item.setSizeHint(row_widget.sizeHint())
             self.list_widget.addItem(item)
             self.list_widget.setItemWidget(item, row_widget)
+        self.hint_label.setText("Click a color to copy its hex code")
 
     def _on_item_clicked(self, item):
         hex_code = item.data(Qt.UserRole)

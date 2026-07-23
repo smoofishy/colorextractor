@@ -3,6 +3,7 @@ from PySide6.QtWidgets import QFileDialog, QMainWindow, QStackedWidget
 
 from .editor_page import EditorPage
 from .project import Project
+from .storage import load_recent_projects, save_recent_projects
 from .theme import DARK_STYLESHEET
 from .utils import FILE_DIALOG_FILTER
 from .welcome_page import WelcomePage
@@ -17,7 +18,7 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
         self.setStyleSheet(DARK_STYLESHEET)
 
-        self._recent_projects = []
+        self._recent_projects = load_recent_projects()
 
         self.welcome_page = WelcomePage()
         self.editor_page = EditorPage()
@@ -26,6 +27,8 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.welcome_page)
         self.stack.addWidget(self.editor_page)
         self.setCentralWidget(self.stack)
+
+        self.welcome_page.set_recent(self._recent_projects)
 
         self.welcome_page.imageSelected.connect(self.open_image)
         self.welcome_page.projectRenamed.connect(self._on_project_renamed)
@@ -98,6 +101,7 @@ class MainWindow(QMainWindow):
         self._recent_projects.insert(0, project)
         del self._recent_projects[self.MAX_RECENT:]
         self.welcome_page.set_recent(self._recent_projects)
+        save_recent_projects(self._recent_projects)
 
     def _on_project_renamed(self, path, new_title):
         project = self._find_project(path)
@@ -105,5 +109,6 @@ class MainWindow(QMainWindow):
             return
         project.title = new_title
         self.welcome_page.set_recent(self._recent_projects)
+        save_recent_projects(self._recent_projects)
         if self.editor_page.current_path() == path:
             self.editor_page.set_title(new_title)

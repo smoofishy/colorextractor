@@ -1,4 +1,5 @@
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -11,7 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .image_io import make_tile_icon, plus_tile_icon
+from .image_io import broken_tile_icon, load_thumbnail_qimage, placeholder_tile_icon, plus_tile_icon
 from .utils import FILE_DIALOG_FILTER, first_image_path
 
 TILE_SIZE = 170
@@ -22,6 +23,31 @@ NAME_LIMIT = 20
 
 def _short_name(name):
     return name if len(name) <= NAME_LIMIT else name[: NAME_LIMIT - 1] + "…"
+
+
+class _ThumbnailSignals(QObject):
+    ready = Signal(str, object)  # (path, QImage | None)
+
+
+class _ThumbnailTask(QRunnable):
+    """Decodes one tile's thumbnail off the GUI thread.
+
+    Emits a QImage rather than a QIcon/QPixmap: QPixmap has GUI-thread
+    affinity, so building it must happen back on the main thread.
+    """
+
+    def __init__(self, path, size, signals):
+        super().__init__()
+        self._path = path
+        self._size = size
+        self._signals = signals
+
+    def run(self):
+        try:
+            qimage = load_thumbnail_qimage(self._path, self._size)
+        except OSError:
+            qimage = None
+        self._signals.ready.emit(self._path, qimage)
 
 
 class WelcomePage(QWidget):
@@ -59,6 +85,10 @@ class WelcomePage(QWidget):
 
         self._add_open_tile()
 
+        self._thumbnail_pool = QThreadPool.globalInstance()
+        self._thumbnail_signals = _ThumbnailSignals()
+        self._thumbnail_signals.ready.connect(self._on_thumbnail_ready)
+
     def _build_top_bar(self):
         row = QHBoxLayout()
 
@@ -82,11 +112,15 @@ class WelcomePage(QWidget):
         self.grid.addItem(item)
 
     def set_recent(self, projects):
+        """Populate the grid instantly with placeholder tiles, then decode
+        each thumbnail on a background thread so opening the app never
+        blocks on reading a pile of large photos off disk."""
         self.grid.blockSignals(True)
         while self.grid.count() > 1:
             self.grid.takeItem(1)
+        placeholder = placeholder_tile_icon(TILE_SIZE)
         for project in projects:
-            item = QListWidgetItem(make_tile_icon(project.path, TILE_SIZE), _short_name(project.title))
+            item = QListWidgetItem(placeholder, _short_name(project.title))
             item.setData(PATH_ROLE, project.path)
             item.setToolTip(project.path)
             item.setTextAlignment(Qt.AlignHCenter)
@@ -94,6 +128,25 @@ class WelcomePage(QWidget):
             self.grid.addItem(item)
         self.grid.blockSignals(False)
         self._apply_filter(self.search_box.text())
+
+        for project in projects:
+            self._thumbnail_pool.start(_ThumbnailTask(project.path, TILE_SIZE, self._thumbnail_signals))
+
+    def _on_thumbnail_ready(self, path, qimage):
+        item = self._find_item(path)
+        if item is None:
+            return
+        icon = QIcon(QPixmap.fromImage(qimage)) if qimage is not None else broken_tile_icon(TILE_SIZE)
+        self.grid.blockSignals(True)
+        item.setIcon(icon)
+        self.grid.blockSignals(False)
+
+    def _find_item(self, path):
+        for i in range(self.grid.count()):
+            item = self.grid.item(i)
+            if item.data(PATH_ROLE) == path:
+                return item
+        return None
 
     def _apply_filter(self, text):
         text = text.strip().lower()

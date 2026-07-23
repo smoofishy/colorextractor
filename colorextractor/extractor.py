@@ -43,7 +43,14 @@ def extract_colors(
         raise FileNotFoundError(f"Image not found: {path}")
 
     try:
-        img = Image.open(path).convert("RGB")
+        img = Image.open(path)
+        if resize_max:
+            # Have the decoder itself scale down while decoding (JPEG only;
+            # a no-op for other formats) instead of decoding at full
+            # resolution just to immediately shrink it - the bulk of the
+            # cost for a large photo is in the decode, not the resize.
+            img.draft("RGB", (resize_max, resize_max))
+        img = img.convert("RGB")
     except Image.UnidentifiedImageError as exc:
         raise ValueError(f"Could not read '{path}' as an image") from exc
 
